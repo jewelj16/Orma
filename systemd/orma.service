@@ -1,0 +1,19 @@
+[Unit]
+Description=Orma — local file-versioning daemon
+Documentation=https://github.com/orma/orma
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env orma daemon
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Reasonable resource limits for a per-user watcher
+MemoryMax=512M
+CPUQuota=25%
+
+[Install]
+WantedBy=default.target
