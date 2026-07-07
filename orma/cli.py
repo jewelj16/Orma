@@ -64,6 +64,33 @@ def track(directory: str) -> None:
 
 
 @main.command()
+@click.argument(
+    "directory", type=click.Path(exists=True, file_okay=False)
+)
+def status(directory: str) -> None:
+    """Show tracking status for a directory."""
+    root = Path(directory).resolve()
+    if not (root / ".orma").is_dir():
+        click.echo(
+            f"Error: {directory} is not tracked.", err=True
+        )
+        sys.exit(1)
+
+    from orma.db import Ledger
+
+    ledger = Ledger(root)
+    ledger.open()
+    try:
+        files = ledger.get_file_count()
+        versions = ledger.get_total_versions()
+        click.echo(f"Tracked directory: {root}")
+        click.echo(f"  Files:    {files}")
+        click.echo(f"  Versions: {versions}")
+    finally:
+        ledger.close()
+
+
+@main.command()
 @click.argument("filepath", type=click.Path(exists=True))
 def history(filepath: str) -> None:
     """Show the version history of a tracked file."""

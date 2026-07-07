@@ -118,7 +118,22 @@ class Ledger:
         ).fetchone()
         return row[0] if row else None
 
+    def get_file_count(self) -> int:
+        """Return the number of tracked files."""
+        row = self._db.execute(
+            "SELECT COUNT(*) FROM files WHERE is_active = 1"
+        ).fetchone()
+        return row[0]
+
+    def get_total_versions(self) -> int:
+        """Return the total number of version records."""
+        row = self._db.execute(
+            "SELECT COUNT(*) FROM versions"
+        ).fetchone()
+        return row[0]
+
     # -- versions ------------------------------------------------------------
+
 
     def add_version(
         self,
