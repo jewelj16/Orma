@@ -45,6 +45,10 @@ def track(directory: str) -> None:
     root = Path(directory).resolve()
     backend = _get_backend(root)
     try:
+        from orma.ignore import is_ignored, load_ignore_patterns
+
+        patterns = load_ignore_patterns(root)
+
         # Initial scan: version every existing file
         count = 0
         for f in root.rglob("*"):
@@ -53,6 +57,8 @@ def track(directory: str) -> None:
             # Skip orma internals and hidden dirs
             rel = f.relative_to(root)
             if any(part.startswith(".") for part in rel.parts):
+                continue
+            if is_ignored(str(rel), patterns):
                 continue
             result = backend.on_file_saved(f)
             if result.saved:

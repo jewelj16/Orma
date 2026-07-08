@@ -16,6 +16,7 @@ from watchdog.events import FileModifiedEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from orma.db import ORMA_DIR
+from orma.ignore import is_ignored, load_ignore_patterns
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class _DebouncedHandler(FileSystemEventHandler):
         self._debounce_seconds = debounce_seconds
         self._timers: dict[Path, threading.Timer] = {}
         self._lock = threading.Lock()
+        self._ignore_patterns = load_ignore_patterns(root_dir)
 
     # -- watchdog overrides --------------------------------------------------
 
@@ -60,6 +62,9 @@ class _DebouncedHandler(FileSystemEventHandler):
         except ValueError:
             return
         if any(part in _IGNORE_DIRS for part in rel.parts):
+            return
+        # Skip files matching .ormaignore patterns
+        if is_ignored(str(rel), self._ignore_patterns):
             return
 
         self._schedule(path)
