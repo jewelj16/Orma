@@ -132,7 +132,24 @@ class Ledger:
         ).fetchone()
         return row[0]
 
+    def rename_file(self, old_rel: str, new_rel: str) -> None:
+        """Update rel_path for a renamed/moved file."""
+        self._db.execute(
+            "UPDATE files SET rel_path = ? WHERE rel_path = ?",
+            (new_rel, old_rel),
+        )
+        self._db.commit()
+
+    def deactivate_file(self, rel_path: str) -> None:
+        """Mark a file as inactive (soft-delete / untracked)."""
+        self._db.execute(
+            "UPDATE files SET is_active = 0 WHERE rel_path = ?",
+            (rel_path,),
+        )
+        self._db.commit()
+
     # -- versions ------------------------------------------------------------
+
 
 
     def add_version(

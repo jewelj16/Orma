@@ -12,7 +12,13 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
-from watchdog.events import FileModifiedEvent, FileSystemEventHandler
+from watchdog.events import (
+    FileCreatedEvent,
+    FileDeletedEvent,
+    FileModifiedEvent,
+    FileMovedEvent,
+    FileSystemEventHandler,
+)
 from watchdog.observers import Observer
 
 from orma.db import ORMA_DIR
@@ -38,36 +44,71 @@ class _DebouncedHandler(FileSystemEventHandler):
         self,
         root_dir: Path,
         on_file_change: Callable[[Path], None],
+        on_file_delete: Callable[[Path], None] | None = None,
+        on_file_move: Callable[[Path, Path], None] | None = None,
         debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS,
     ) -> None:
         super().__init__()
         self._root_dir = root_dir
         self._on_file_change = on_file_change
+        self._on_file_delete = on_file_delete
+        self._on_file_move = on_file_move
         self._debounce_seconds = debounce_seconds
         self._timers: dict[Path, threading.Timer] = {}
         self._lock = threading.Lock()
         self._ignore_patterns = load_ignore_patterns(root_dir)
 
-    # -- watchdog overrides --------------------------------------------------
+    def _should_ignore(self, path: Path) -> bool:
+        """Return True if *path* should be skipped."""
+        try:
+            rel = path.relative_to(self._root_dir)
+        except ValueError:
+            return True
+        if any(part in _IGNORE_DIRS for part in rel.parts):
+            return True
+        return is_ignored(str(rel), self._ignore_patterns)
 
     def on_modified(self, event: FileModifiedEvent) -> None:  # type: ignore[override]
         if event.is_directory:
             return
-
         path = Path(event.src_path)
-
-        # Skip files inside ignored directories
-        try:
-            rel = path.relative_to(self._root_dir)
-        except ValueError:
+        if self._should_ignore(path):
             return
-        if any(part in _IGNORE_DIRS for part in rel.parts):
-            return
-        # Skip files matching .ormaignore patterns
-        if is_ignored(str(rel), self._ignore_patterns):
-            return
-
         self._schedule(path)
+
+    def on_created(self, event: FileCreatedEvent) -> None:  # type: ignore[override]
+        if event.is_directory:
+            return
+        path = Path(event.src_path)
+        if self._should_ignore(path):
+            return
+        # Treat new files the same as modifications
+        self._schedule(path)
+
+    def on_deleted(self, event: FileDeletedEvent) -> None:  # type: ignore[override]
+        if event.is_directory or self._on_file_delete is None:
+            return
+        path = Path(event.src_path)
+        if self._should_ignore(path):
+            return
+        logger.debug("file deleted: %s", path)
+        try:
+            self._on_file_delete(path)
+        except Exception:
+            logger.exception("error handling delete: %s", path)
+
+    def on_moved(self, event: FileMovedEvent) -> None:  # type: ignore[override]
+        if event.is_directory or self._on_file_move is None:
+            return
+        src = Path(event.src_path)
+        dest = Path(event.dest_path)
+        if self._should_ignore(src) and self._should_ignore(dest):
+            return
+        logger.debug("file moved: %s -> %s", src, dest)
+        try:
+            self._on_file_move(src, dest)
+        except Exception:
+            logger.exception("error handling move: %s", src)
 
     # -- debounce logic ------------------------------------------------------
 
@@ -124,11 +165,17 @@ class DirectoryWatcher:
         self,
         root_dir: Path,
         on_file_change: Callable[[Path], None],
+        on_file_delete: Callable[[Path], None] | None = None,
+        on_file_move: Callable[[Path, Path], None] | None = None,
         debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS,
     ) -> None:
         self._root_dir = root_dir
         self._handler = _DebouncedHandler(
-            root_dir, on_file_change, debounce_seconds
+            root_dir,
+            on_file_change,
+            on_file_delete=on_file_delete,
+            on_file_move=on_file_move,
+            debounce_seconds=debounce_seconds,
         )
         self._observer = Observer()
         self._observer.schedule(

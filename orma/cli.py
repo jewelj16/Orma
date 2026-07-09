@@ -172,7 +172,25 @@ def watch(directory: str) -> None:
             rel = path.relative_to(root)
             click.echo(f"  v{result.version_number}: {rel}")
 
-    watcher = DirectoryWatcher(root, on_change)
+    def on_delete(path: Path) -> None:
+        rel = str(path.resolve().relative_to(root))
+        backend._db.deactivate_file(rel)
+        click.echo(f"  deleted: {rel}")
+
+    def on_move(src: Path, dest: Path) -> None:
+        old_rel = str(src.resolve().relative_to(root))
+        new_rel = str(dest.resolve().relative_to(root))
+        backend._db.rename_file(old_rel, new_rel)
+        click.echo(f"  moved: {old_rel} -> {new_rel}")
+        # Also version the file at its new location
+        if dest.is_file():
+            on_change(dest)
+
+    watcher = DirectoryWatcher(
+        root, on_change,
+        on_file_delete=on_delete,
+        on_file_move=on_move,
+    )
 
     def shutdown(_sig: int, _frame: object) -> None:
         click.echo("\nStopping watcher...")
