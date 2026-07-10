@@ -65,6 +65,10 @@ def track(directory: str) -> None:
                 count += 1
         click.echo(f"Tracking {root}")
         click.echo(f"  {count} file(s) scanned and versioned.")
+
+        from orma.config import add_tracked_dir
+
+        add_tracked_dir(str(root))
     finally:
         backend.close()
 
@@ -205,4 +209,68 @@ def watch(directory: str) -> None:
     watcher.start()
 
     # Block the main thread until signaled
+    signal.pause()
+
+
+@main.command()
+def daemon() -> None:
+    """Run the Orma daemon (watches all tracked directories)."""
+    import logging as _logging
+
+    from orma.config import get_tracked_dirs
+    from orma.watcher import DirectoryWatcher
+
+    _logging.basicConfig(
+        level=_logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+
+    tracked = get_tracked_dirs()
+    if not tracked:
+        click.echo("No tracked directories. Run `orma track` first.")
+        sys.exit(0)
+
+    watchers: list[DirectoryWatcher] = []
+    backends: list[GitBackend] = []
+
+    for dir_path in tracked:
+        root = Path(dir_path)
+        if not root.is_dir() or not (root / ".orma").is_dir():
+            click.echo(
+                f"  skipping {dir_path} (missing or not tracked)",
+                err=True,
+            )
+            continue
+
+        backend = _get_backend(root)
+        backends.append(backend)
+
+        def make_on_change(b: GitBackend, r: Path):
+            def on_change(path: Path) -> None:
+                if not path.is_file():
+                    return
+                b.on_file_saved(path)
+            return on_change
+
+        w = DirectoryWatcher(root, make_on_change(backend, root))
+        watchers.append(w)
+
+    if not watchers:
+        click.echo("No valid tracked directories found.")
+        sys.exit(1)
+
+    def shutdown(_sig: int, _frame: object) -> None:
+        for w in watchers:
+            w.stop()
+        for b in backends:
+            b.close()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
+
+    click.echo(f"Orma daemon: watching {len(watchers)} directory(s)")
+    for w in watchers:
+        w.start()
+
     signal.pause()
