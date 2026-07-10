@@ -20,6 +20,9 @@ from orma.db import ORMA_DIR, Ledger
 
 logger = logging.getLogger(__name__)
 
+# Files larger than this are skipped with a warning (default 50 MB)
+MAX_FILE_BYTES = 50 * 1024 * 1024
+
 
 class GitBackend(VersionBackend):
     """VersionBackend implementation backed by a hidden Git repository."""
@@ -87,16 +90,44 @@ class GitBackend(VersionBackend):
         logger.info("tracking: %s", self._root_dir)
 
     def on_file_saved(self, path: Path) -> SaveResult:
-        """Stage, commit, and mirror to ledger.  Skip no-op saves."""
+        """Stage, commit, and mirror to ledger.  Skip no-op saves.
+
+        Guards against symlinks, large files, and permission errors.
+        """
+        # -- edge-case guards ------------------------------------------------
+        if path.is_symlink():
+            logger.debug("skipping symlink: %s", path)
+            return SaveResult(saved=False, version_number=0, sha256="")
+
+        try:
+            stat = path.stat()
+        except (PermissionError, OSError) as exc:
+            logger.warning("cannot access %s: %s", path, exc)
+            return SaveResult(saved=False, version_number=0, sha256="")
+
+        if stat.st_size > MAX_FILE_BYTES:
+            logger.warning(
+                "skipping large file (%d bytes > %d limit): %s",
+                stat.st_size, MAX_FILE_BYTES, path,
+            )
+            return SaveResult(saved=False, version_number=0, sha256="")
+
         rel = self._rel_path(path)
         file_id = self._db.ensure_file(rel)
 
         # Compute hash and check for no-op
-        current_hash = self._sha256(path)
+        try:
+            current_hash = self._sha256(path)
+        except (PermissionError, OSError) as exc:
+            logger.warning("cannot read %s: %s", path, exc)
+            return SaveResult(saved=False, version_number=0, sha256="")
+
         last_hash = self._db.get_latest_sha256(file_id)
         if current_hash == last_hash:
             ver = self._db.get_latest_version_number(file_id)
-            return SaveResult(saved=False, version_number=ver, sha256=current_hash)
+            return SaveResult(
+                saved=False, version_number=ver, sha256=current_hash
+            )
 
         # Stage and commit
         self._git("add", "--force", rel)
